@@ -1,5 +1,6 @@
 import go
 
+//first
 private class SchemaBuilder extends Function  {
   SchemaBuilder() {
     this.getPackage().getPath() = "sigs.k8s.io/controller-runtime/pkg/scheme"
@@ -8,34 +9,40 @@ private class SchemaBuilder extends Function  {
   }
 }
 
+//explorative using select and print AST
 private class CustomResourceType extends Type {
   CustomResourceType() {
-    exists(CallExpr ce, Function f, Expr e, PointerType pt | 
+    exists(CallExpr ce, Function f, Expr e, PointerType pt, TypeSpec ts | 
           f = ce.getTarget()
       and f instanceof SchemaBuilder
       and e = ce.getAnArgument()
       and pt = e.getType()
-      and pt.getBaseType().getName() = this.getName()
+      and this = pt.getBaseType()
+      and ts.getName() = this.getName()
     )
   }
 }
-
-from Field fi, Write write, Type t, Expr oute, StructTypeExpr str, 
-      CallExpr ce, Function f, Expr e, PointerType pt
-where f = ce.getTarget()
-and f instanceof SchemaBuilder
-and e = ce.getAnArgument()
-and pt = e.getType()
-and t = pt.getBaseType()
-and oute.getType() = t
-and t instanceof NamedType
-//and pt.getBaseType() = stt
-//and pt.getBaseType().getName() = ste.getType().getName()
-select oute.getLocation()
-
-
 /*
+from CustomResourceType crt, TypeSpec ts
+where crt.getName() = ts.getName()
+select ts.getLocation(), "YES!"
+*/
+
+from TypeDecl td, TypeSpec ts, CustomResourceType crt, StructTypeExpr ste,
+  Field f, Write w, StructType st
+where
+  td.getASpec() = ts
+  and ts.getName() = crt.getName()
+  and ste = ts.getAChildExpr()
+  and ste.getType() = st
+  and f = st.getField(_) 
+  and w = f.getAWrite()
+select w.getLhs(), w.getRhs()
+
+
+//lifted example from the web to help with finding writes
 //Writes to Url field
+/*
 from Field f, Write write, StructType stt, StructTypeExpr ste
 where 
   stt.hasField("Url", _)
