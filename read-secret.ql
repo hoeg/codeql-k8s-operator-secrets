@@ -14,10 +14,13 @@ private class K8sGet extends Function {
   }
 }
 
+
+//first returned ce.getLocation() but it dawned on me that I need the secret.
+//it should be the argument that is the sink!!
 from CallExpr ce, Expr e, PointerType pt, Function f
 where f = ce.getTarget()
   and f instanceof K8sGet
   and e = ce.getAnArgument()
   and pt = e.getType()
   and pt.getBaseType() instanceof KubernetesSecret
-select ce.getLocation()
+select e
