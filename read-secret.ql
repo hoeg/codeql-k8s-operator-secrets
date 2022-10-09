@@ -17,7 +17,9 @@ private class K8sGet extends Function {
 
 //first returned ce.getLocation() but it dawned on me that I need the secret.
 //it should be the argument that is the sink!!
-from CallExpr ce, Expr e, PointerType pt, Function f
+
+//alas the argument is just the secret. What is actually set used is the data inside the secret! We need to find that!
+from CallExpr ce, Expr e, PointerType pt, Function f, Read r
 where f = ce.getTarget()
   and f instanceof K8sGet
   and e = ce.getAnArgument()
