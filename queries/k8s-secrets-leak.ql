@@ -1,14 +1,13 @@
 /**
- * @name Database query built from user-controlled sources
- * @description Building a database query from user-controlled sources is vulnerable to insertion of
- *              malicious code by the user.
+ * @name Exposing secret values in k8s custom resources
+ * @description A secret value is assigned to a variable of a kubernetes custom resource
  * @kind path-problem
  * @problem.severity error
- * @security-severity 8.8
+ * @security-severity 10
  * @precision high
- * @id go/sql-injection
+ * @id go/k8s-secrets-leak
  * @tags security
- *       external/cwe/cwe-089
+ *       external/cwe/cwe-200
  */
 
 import go
@@ -23,16 +22,11 @@ private class SchemaBuilder extends Function  {
     }
   }
   
-  //explorative using select and print AST
   private class CustomResourceType extends Type {
     CustomResourceType() {
-      exists(CallExpr ce, Function f, Expr e, PointerType pt, TypeSpec ts | 
-            f = ce.getTarget()
-        and f instanceof SchemaBuilder
-        and e = ce.getAnArgument()
-        and pt = e.getType()
-        and this = pt.getBaseType()
-        and ts.getName() = this.getName()
+      exists(CallExpr ce | 
+        ce.getTarget() instanceof SchemaBuilder
+        and this = ce.getAnArgument().getType().(PointerType).getBaseType()
       )
     }
   }
