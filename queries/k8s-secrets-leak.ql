@@ -15,35 +15,43 @@ import DataFlow::PathGraph
 import semmle.go.frameworks.K8sIoClientGo
 
 private class SchemaBuilder extends Function  {
-    SchemaBuilder() {
-      this.getPackage().getPath() = "sigs.k8s.io/controller-runtime/pkg/scheme"
-      and 
-      this.getName() = "Register"
-    }
+  SchemaBuilder() {
+    this.getPackage().getPath() = "sigs.k8s.io/controller-runtime/pkg/scheme"
+    and 
+    this.getName() = "Register"
   }
-  
-  private class CustomResourceType extends Type {
-    CustomResourceType() {
-      exists(CallExpr ce | 
-        ce.getTarget() instanceof SchemaBuilder
-        and this = ce.getAnArgument().getType().(PointerType).getBaseType()
-      )
-    }
-  }
+}
 
-  private class KubernetesSecret extends Type {
-    KubernetesSecret() {
-          this.getPackage().getPath() = "k8s.io/api/core/v1" 
-      and this.getName() = "Secret"
-    }
+private class APISchemaBuilder extends Function {
+  APISchemaBuilder() {
+    this.getName() = "AddKnownTypes"
+    and 
+    this.getPackage().getPath() = "k8s.io/apimachinery/pkg/runtime"
   }
+} 
 
-  private class K8sGet extends Function {
-    K8sGet() {
-          this.getPackage().getPath() = "sigs.k8s.io/controller-runtime/pkg/client"
-      and this.getName() = "Get" 
-    }
+private class CustomResourceType extends Type {
+  CustomResourceType() {
+    exists(CallExpr ce | 
+      (ce.getTarget() instanceof SchemaBuilder)// or ce.getTarget() instanceof APISchemaBuilder)
+      and this = ce.getAnArgument().getType().(PointerType).getBaseType()
+    )
   }
+}
+
+private class KubernetesSecret extends Type {
+  KubernetesSecret() {
+        this.getPackage().getPath() = "k8s.io/api/core/v1" 
+    and this.getName() = "Secret"
+  }
+}
+
+private class K8sGet extends Function {
+  K8sGet() {
+        this.getPackage().getPath() = "sigs.k8s.io/controller-runtime/pkg/client"
+    and this.getName() = "Get" 
+  }
+}
 
 
 class KubernetesSecretSource extends DataFlow::Node {
@@ -120,5 +128,5 @@ class SecretToCustomResourceTaintConfiguration extends TaintTracking::Configurat
   
   from DataFlow::PathNode source, DataFlow::PathNode sink, SecretToCustomResourceTaintConfiguration cfg
   where cfg.hasFlowPath(source, sink)
-  select sink.getNode(), source, sink, "msg"
+  select sink.getNode(), source, sink, "Secret value is leaked in Custom Resource"
 
