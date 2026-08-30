@@ -1,0 +1,5 @@
+name: hoeg/k8s-operators-tests
+extractor: go
+tests: .
+dependencies:
+  hoeg/k8s-operators: ${workspace}

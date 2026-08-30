@@ -1,0 +1,14 @@
+name: hoeg/k8s-operators
+version: 1.0.0
+library: false
+extractor: go
+warnOnImplicitThis: true
+description: Queries for Kubernetes operator secret handling in Go
+license: MIT
+groups:
+  - go
+  - k8s
+suites: codeql-suites
+defaultSuiteFile: codeql-suites/k8s-operators.qls
+dependencies:
+  codeql/go-all: ^7.3.0

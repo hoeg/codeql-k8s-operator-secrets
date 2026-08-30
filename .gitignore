@@ -1,1 +1,26 @@
-.cache
+# CodeQL CLI scratch state
+.cache/
+.codeql/
+
+# Query outputs and compiled artefacts.
+# Stale .qlx files can mask edits to the .ql they were built from.
+*.bqrs
+*.sarif
+*.qlx
+results/
+
+# Local editor / database state
+*.code-workspace
+*-db/
+
+# macOS
+.DS_Store
+
+# NOTE: src/codeql-pack.lock.yml is committed deliberately, for reproducible
+# dependency resolution and for `codeql pack install --mode verify` in CI.
+# Do not add it here.
+
+# CodeQL test scratch: `codeql test run` extracts a database per test dir
+# and writes .actual on failure. Both are generated; never commit them.
+*.testproj
+*.actual

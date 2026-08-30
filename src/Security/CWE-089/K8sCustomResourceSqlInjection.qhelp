@@ -1,0 +1,87 @@
+<!DOCTYPE qhelp PUBLIC "-//Semmle//qhelp//EN" "qhelp.dtd">
+<qhelp>
+
+<overview>
+<p>
+An operator reconciles custom resources that its users write. A string field of a custom
+resource is therefore untrusted input: anyone who can create or edit that resource — often
+a much larger group than the cluster administrators, since namespace-scoped
+<code>edit</code> on a CRD is a common grant — controls its exact contents.
+</p>
+
+<p>
+This query reports a string field of a type registered as a custom resource with
+<code>sigs.k8s.io/controller-runtime/pkg/scheme</code> whose value reaches, through taint,
+a SQL or NoSQL query sink. If that value is concatenated into query text rather than passed
+as a bound parameter, the author of the custom resource can inject arbitrary query syntax
+and read, modify, or destroy data in the operator's database.
+</p>
+
+<p>
+The result is a path from the field read to the query sink, so it can be checked whether
+the value is really interpolated into the query or merely passed alongside it.
+</p>
+</overview>
+
+<recommendation>
+<p>
+Use parameterized queries. Pass the value as a query argument (<code>?</code> or
+<code>$1</code> with <code>database/sql</code>) rather than building the statement with
+<code>fmt.Sprintf</code> or string concatenation, so the database driver never parses it as
+query syntax. For a NoSQL driver, build the filter as a typed document rather than from a
+string.
+</p>
+
+<p>
+Where a value cannot be a bound parameter — a table or column name, a sort direction —
+validate it against a fixed allowlist of permitted values before it reaches the query.
+</p>
+
+<p>
+Independently of the query itself, constrain what a custom resource may contain: an
+OpenAPI <code>pattern</code> or <code>enum</code> in the CRD schema, or a validating
+admission webhook, rejects malformed values before the operator ever sees them. Treat this
+as defense in depth, not as a replacement for parameterization.
+</p>
+</recommendation>
+
+<example>
+<p>
+In the following example, the operator builds a query out of a field taken straight from
+the custom resource it is reconciling.
+</p>
+
+<sample language="go">
+func (r *WidgetReconciler) rows(ctx context.Context, widget *v1alpha1.Widget) (*sql.Rows, error) {
+	// BAD: a user-controlled field of the custom resource is concatenated into the query.
+	q := "SELECT id, value FROM metrics WHERE tenant = '" + widget.Spec.Tenant + "'"
+	return r.DB.QueryContext(ctx, q)
+}
+</sample>
+
+<p>
+In the corrected version the field is passed as a bound parameter, so the driver treats it
+as a value and never as query syntax.
+</p>
+
+<sample language="go">
+func (r *WidgetReconciler) rows(ctx context.Context, widget *v1alpha1.Widget) (*sql.Rows, error) {
+	// GOOD: the value is bound as a parameter.
+	const q = "SELECT id, value FROM metrics WHERE tenant = $1"
+	return r.DB.QueryContext(ctx, q, widget.Spec.Tenant)
+}
+</sample>
+</example>
+
+<references>
+<li>Go documentation:
+<a href="https://go.dev/doc/database/sql-injection">Avoiding SQL injection risk</a>.</li>
+<li>OWASP:
+<a href="https://cheatsheetseries.owasp.org/cheatsheets/SQL_Injection_Prevention_Cheat_Sheet.html">SQL Injection Prevention Cheat Sheet</a>.</li>
+<li>Kubernetes documentation:
+<a href="https://kubernetes.io/docs/reference/access-authn-authz/extensible-admission-controllers/">Dynamic Admission Control</a>.</li>
+<li>Kubernetes documentation:
+<a href="https://kubernetes.io/docs/tasks/extend-kubernetes/custom-resources/custom-resource-definitions/#validation">Custom resource validation</a>.</li>
+</references>
+
+</qhelp>

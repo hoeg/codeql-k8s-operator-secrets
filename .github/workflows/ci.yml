@@ -1,0 +1,82 @@
+name: CI
+
+# Every blocker fixed by the pack-modernization refactor (a missing lock file,
+# the deleted class-based dataflow API, a duplicate class, a query-less .ql,
+# and a documented run command that could not resolve the pack) is caught by
+# one of the gates below, on every push and every PR.
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  qlpack:
+    name: Compile and test the query pack
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v4
+
+      # The Go extractor needs a Go toolchain to build the test fixtures.
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: stable
+          cache: false
+
+      # Supplies the CodeQL CLI and the Go extractor.
+      - name: Initialize CodeQL
+        id: init-codeql
+        uses: github/codeql-action/init@v3
+        with:
+          languages: go
+
+      - name: Put the CodeQL CLI on PATH
+        run: |
+          codeql_path='${{ steps.init-codeql.outputs.codeql-path }}'
+          if [ -z "$codeql_path" ]; then
+            echo "::error::github/codeql-action/init did not report a codeql-path" >&2
+            exit 1
+          fi
+          dirname "$codeql_path" >> "$GITHUB_PATH"
+
+      - name: Report the CodeQL version
+        run: codeql version --format=terse
+
+      # Fails on a stale or missing src/codeql-pack.lock.yml.
+      - name: Verify the committed lock file
+        run: codeql pack install --mode verify src/
+
+      - name: Check QL formatting
+        run: codeql query format --check-only $(find src -name '*.ql' -o -name '*.qll')
+
+      - name: Compile the queries
+        run: codeql query compile --check-only --threads=0 -- src/
+
+      - name: Run the query tests
+        run: codeql test run --threads=0 -- test/
+
+      # The README tells people to analyze by pack name with --search-path=.,
+      # because a bare pack name resolves against the package cache and the
+      # search path only -- codeql-workspace.yml is not consulted implicitly and
+      # this pack is neither installed nor published. Guard that documented
+      # invocation, and assert it selects exactly the two Security/ queries and
+      # none of the metadata-less Exploration/ ones.
+      - name: Check the documented pack invocation resolves
+        run: |
+          resolved="$(mktemp)"
+          codeql resolve queries --search-path=. -- hoeg/k8s-operators > "$resolved"
+          cat "$resolved"
+          if [ "$(grep -c '/src/Security/' "$resolved")" -ne 2 ] \
+             || [ "$(grep -c '/src/Exploration/' "$resolved")" -ne 0 ] \
+             || [ "$(wc -l < "$resolved")" -ne 2 ]; then
+            echo "::error::hoeg/k8s-operators did not resolve to exactly the two Security/ queries" >&2
+            exit 1
+          fi

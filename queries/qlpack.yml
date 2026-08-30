@@ -1,4 +1,0 @@
-name: hoeg/k8s-operators
-version: 1.0.0
-dependencies:
-  codeql/go-all: "*"
