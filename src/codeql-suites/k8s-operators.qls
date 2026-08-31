@@ -1,7 +1,27 @@
-- description: Kubernetes operator secret-leak queries
+- description: Kubernetes operator secret-leak queries, plus the coverage diagnostic
+
 - queries: .
+
+# The two security queries. Both conditions in this block are ANDed, so a
+# `problem`/`path-problem` query without the `security` tag is still excluded.
 - include:
     kind:
       - problem
       - path-problem
     tags contain: security
+
+# The coverage diagnostic. This has to be a *separate* include block rather than
+# another entry under the block above: conditions inside one block are ANDed, so
+# adding `diagnostic` to the `kind` list there would have required a diagnostic
+# query to also carry `tags contain: security`, and relaxing the tag condition to
+# admit it would have widened the first block for the security queries too.
+# Separate blocks are ORed, so this adds the diagnostic and changes nothing else.
+#
+# The seven Exploration queries stay out because they carry no query metadata at
+# all — no `@kind`, no `@id` — so no `kind:` condition in either block can match
+# them. Verify with:
+#   codeql resolve queries --search-path=. -- hoeg/k8s-operators
+# which must list exactly K8sSecretsLeak.ql, K8sCustomResourceSqlInjection.ql and
+# Diagnostics/CustomResourceCoverage.ql.
+- include:
+    kind: diagnostic

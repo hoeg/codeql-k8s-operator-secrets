@@ -1,0 +1,26 @@
+edges
+| test.go:82:11:82:63 | ...+... | test.go:82:11:82:63 | ...+... | provenance | Config |
+| test.go:82:11:82:63 | ...+... | test.go:82:11:82:69 | ...+... | provenance |  |
+| test.go:82:11:82:63 | ...+... | test.go:82:11:82:69 | ...+... | provenance | Sink:MaD:184 |
+| test.go:82:11:82:69 | ...+... | test.go:82:11:82:69 | ...+... | provenance | Config Sink:MaD:184 |
+| test.go:82:50:82:63 | selection of Filter | test.go:82:11:82:63 | ...+... | provenance |  |
+| test.go:102:11:102:80 | ...+... | test.go:102:11:102:80 | ...+... | provenance | Config |
+| test.go:102:11:102:80 | ...+... | test.go:102:11:102:86 | ...+... | provenance |  |
+| test.go:102:11:102:80 | ...+... | test.go:102:11:102:86 | ...+... | provenance | Sink:MaD:184 |
+| test.go:102:11:102:86 | ...+... | test.go:102:11:102:86 | ...+... | provenance | Config Sink:MaD:184 |
+| test.go:102:50:102:80 | selection of Message | test.go:102:11:102:80 | ...+... | provenance |  |
+nodes
+| test.go:82:11:82:63 | ...+... | semmle.label | ...+... |
+| test.go:82:11:82:63 | ...+... | semmle.label | ...+... |
+| test.go:82:11:82:69 | ...+... | semmle.label | ...+... |
+| test.go:82:11:82:69 | ...+... | semmle.label | ...+... |
+| test.go:82:50:82:63 | selection of Filter | semmle.label | selection of Filter |
+| test.go:102:11:102:80 | ...+... | semmle.label | ...+... |
+| test.go:102:11:102:80 | ...+... | semmle.label | ...+... |
+| test.go:102:11:102:86 | ...+... | semmle.label | ...+... |
+| test.go:102:11:102:86 | ...+... | semmle.label | ...+... |
+| test.go:102:50:102:80 | selection of Message | semmle.label | selection of Message |
+subpaths
+#select
+| test.go:82:11:82:69 | ...+... | test.go:82:50:82:63 | selection of Filter | test.go:82:11:82:69 | ...+... | Data from custom resource in SQL query |
+| test.go:102:11:102:86 | ...+... | test.go:102:50:102:80 | selection of Message | test.go:102:11:102:86 | ...+... | Data from custom resource in SQL query |

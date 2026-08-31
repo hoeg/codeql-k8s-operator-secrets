@@ -157,6 +157,28 @@ Type unwrap(Type t) {
 }
 
 /**
+ * Holds if `key` is a `Secret` key under which Kubernetes stores *public*
+ * certificate material rather than a private key.
+ *
+ * `tls.crt` (`corev1.TLSCertKey`) is the leaf certificate of a TLS keypair and
+ * `ca.crt` is both the CA bundle half of a TLS secret and the
+ * `corev1.ServiceAccountRootCAKey` entry of a service-account token secret. All
+ * three are published to every client that opens a connection — a CA bundle is
+ * literally copied into `CustomResourceDefinition.spec.conversion.webhook` and
+ * into webhook configurations by design — so copying them into a custom
+ * resource, a ConfigMap or an annotation is not a leak.
+ *
+ * The private key, `tls.key` (`corev1.TLSPrivateKeyKey`), is deliberately NOT
+ * listed: it is the thing this query exists to find.
+ *
+ * Keys are compared by *constant value*, not by syntax, so a reference to
+ * `corev1.TLSCertKey`, to `corev1.ServiceAccountRootCAKey` or to an operator's
+ * own `const SecretKeyCACert = "ca.crt"` is recognised as well as a bare string
+ * literal.
+ */
+predicate isPublicCertificateKey(string key) { key = ["tls.crt", "ca.crt"] }
+
+/**
  * A read of an element of a Kubernetes `Secret`'s `Data` or `StringData` map.
  * This is the taint source for secret material.
  *
@@ -180,13 +202,20 @@ Type unwrap(Type t) {
  * The *key* of a range (`for k := range secret.Data`) is a `RangeIndexNode` and
  * is deliberately not matched: a `Secret`'s keys are filename-like names, not
  * secret material.
+ *
+ * A read whose index is a constant naming public certificate material
+ * (`isPublicCertificateKey`) is excluded — see that predicate. This is only
+ * possible for the index-expression form: a range over the whole `Data` map
+ * names no key, so it stays a source even when the secret happens to be a TLS
+ * secret.
  */
 class K8sSecretData extends DataFlow::Node {
   K8sSecretData() {
     exists(DataFlow::ReadNode dataRead |
       DataFlow::readsAnElement(this, dataRead) and
       dataRead.readsField(_, "k8s.io/api/core/v1", "Secret", ["Data", "StringData"])
-    )
+    ) and
+    not isPublicCertificateKey(this.(DataFlow::ElementReadNode).getIndex().asExpr().getStringValue())
   }
 }
 
@@ -216,6 +245,11 @@ predicate isPartOfCustomResource(Type t) {
  * structs a single `Field` entity, so `ObjectMeta.Name` is *the same* field on a
  * custom resource, a `Deployment`, a `Service` and a `Secret`. Such fields carry
  * no operator-specific meaning and are excluded from both source and sink.
+ *
+ * `ObjectMeta.Annotations` is an exception handled elsewhere: it is excluded
+ * here like every other meta field, and picked up by
+ * `SecretMaterializationSink` on its own terms, because an annotation is
+ * persisted on whatever object carries it.
  */
 predicate isApiMachineryMetaField(Field f) {
   f.hasQualifiedName("k8s.io/apimachinery/pkg/apis/meta/v1", ["ObjectMeta", "TypeMeta"], _)
@@ -239,45 +273,300 @@ predicate isCustomResourceFieldAccess(DataFlow::Node base, Field f) {
 }
 
 /**
- * Holds if `f` has a string-ish type: a `string`, a *named* type whose
- * underlying type is `string` (`type HumioClusterState string`), or a byte
- * slice.
+ * Holds if `f` is the `Type` field of an `encoding/pem.Block`.
  *
- * Testing `f.getType() instanceof StringType` is not enough: `StringType` is a
+ * Its value is the PEM label — the literal `"CERTIFICATE"`, `"RSA PRIVATE KEY"`
+ * and so on — never key material, and never anything a CR author controls. It
+ * matters because the go taint library's `fieldReadStep` is field-insensitive:
+ * once a `*pem.Block` is tainted by `pem.Decode(secret.Data["tls.key"])`, a read
+ * of *any* of its fields is tainted, including this label. Any operator that
+ * parses certificates out of a `Secret` and then records the label produces an
+ * alert that is pure noise.
+ *
+ * This is not hypothetical: external-secrets' `getKeyFromValue` ends
+ * `fmt.Errorf("key type %v is not supported", pemBlock.Type)`, and that error
+ * message reaches a CR condition. It is two of the five results this query
+ * reported on external-secrets, and both are the label, not the key.
+ *
+ * The suppression built on this predicate is `PemBlockTypeSanitizer`, a barrier
+ * on the *read* of the field. Excluding the field from `isStringishField`
+ * instead does nothing at all: the tainted value flows *into* a custom-resource
+ * field, so the field under test at the sink is the CR's, and the block's field
+ * type is never consulted there.
+ */
+predicate isPemBlockTypeField(Field f) { f.hasQualifiedName("encoding/pem", "Block", "Type") }
+
+/**
+ * The label of a decoded PEM block, suppressed wherever it is read.
+ *
+ * WARNING — THIS CLASS IS CROSS-CUTTING, AND IT IS THE ONLY ONE IN THIS LIBRARY
+ * THAT IS. It extends `TaintTracking::DefaultTaintSanitizer`, which the shared
+ * taint library makes a barrier in *every* `TaintTracking::Global` configuration
+ * in this pack — `K8sSecretsLeak` and `K8sCustomResourceSqlInjection` alike —
+ * without either query naming it in its own `isBarrier`. Reading a query's
+ * `isBarrier` therefore does not tell you the whole barrier set; this class is
+ * the missing piece. That is deliberate: the PEM label is neither secret
+ * material nor attacker-controlled, so it is a sound barrier in both directions.
+ * Anyone adding a `TaintTracking::Global` configuration to this pack inherits it
+ * silently, and anyone narrowing it changes both existing queries at once.
+ *
+ * The suppression has to live here, on the *read*, and cannot be expressed as a
+ * field-type exclusion at the sink: the false-positive shape is a read of
+ * `pem.Block.Type` flowing *into* a custom-resource field, so the field tested
+ * at the sink is the CR's own, and the block's field never appears there. An
+ * exclusion in `isStringishField` is provably inert — deleting one changes no
+ * result on the test suite or the measured corpus.
+ */
+private class PemBlockTypeSanitizer extends TaintTracking::DefaultTaintSanitizer {
+  PemBlockTypeSanitizer() {
+    exists(Field f | isPemBlockTypeField(f) | this.(DataFlow::FieldReadNode).readsField(_, f))
+  }
+}
+
+/**
+ * Holds if `t` is a string-ish type: `string`, a *named* type whose underlying
+ * type is `string` (`type HumioClusterState string`), or a byte slice.
+ *
+ * Testing `t instanceof StringType` is not enough: `StringType` is a
  * `BasicType`, whereas `type Foo string` is a `DefinedType`, so the direct test
  * silently misses the named string types Kubernetes CRDs use heavily.
- * `f.getType().getName() = "string"` is exactly equivalent and equally wrong.
+ * `t.getName() = "string"` is exactly equivalent and equally wrong.
  */
-predicate isStringishField(Field f) {
-  f.getType().getUnderlyingType() instanceof StringType
+predicate isStringishType(Type t) {
+  t.getUnderlyingType() instanceof StringType
   or
-  f.getType().getUnderlyingType() instanceof ByteSliceType
+  t.getUnderlyingType() instanceof ByteSliceType
+}
+
+/**
+ * Holds if `f` has a string-ish type (see `isStringishType`).
+ *
+ * This deliberately carries no exclusion for `encoding/pem.Block.Type`. The PEM
+ * label is suppressed by `PemBlockTypeSanitizer`, a barrier on the *read*; an
+ * exclusion here would be inert, because the field tested at the sink is the
+ * custom resource's, not the block's. See `isPemBlockTypeField`.
+ */
+predicate isStringishField(Field f) { isStringishType(f.getType()) }
+
+/**
+ * Holds if `f` is a container field whose *elements* are string-ish:
+ * `[]string`, `map[string]string`, `[][]byte`, `map[string]TokenString`, and so
+ * on, following `unwrap` (pointers, slices, arrays and map values).
+ *
+ * This is what makes `cr.Spec.List = append(cr.Spec.List, secretValue)` a sink.
+ * The written node there is the *result of `append`*, whose type is the slice,
+ * not the element, so `isStringishField` alone never matches it and the write is
+ * invisible. A `[]byte` field is already string-ish in its own right and is
+ * matched by `isStringishField`, not here (`unwrap` of `[]byte` is `byte`).
+ */
+predicate isStringishContainerField(Field f) { isStringishType(unwrap+(f.getType())) }
+
+/**
+ * Holds if `t` is the `Status` type of a registered custom resource: a type
+ * reachable from a `CustomResourceType` whose name ends in `Status`.
+ *
+ * This is an approximation, and the reason for it is that the CRD YAML is not in
+ * the database. What actually makes a status field non-attacker-controlled is
+ * `subresources: {status: {}}` in the CRD manifest: with it, the API server
+ * strips any user-supplied `status` on create and update, so only the operator
+ * ever writes there. The manifest is not extracted, so the type name stands in
+ * for it.
+ *
+ * Limits of the approximation, all of them deliberate:
+ *
+ * - A CR whose CRD does *not* declare the status subresource has a genuinely
+ *   user-writable status, and this predicate wrongly excludes it. That is the
+ *   minority case; kubebuilder emits `+kubebuilder:subresource:status` for
+ *   essentially every operator CRD.
+ * - It keys on the *name*, so a status struct called something else
+ *   (`FooState`) is not excluded, and a spec struct that happens to end in
+ *   `Status` is.
+ * - Only the type directly declaring the field is tested, so a field of a
+ *   sub-struct nested under the status (`cr.Status.Conditions[0].Message`) is
+ *   still treated as attacker-controlled.
+ */
+predicate isCustomResourceStatusType(Type t) {
+  isPartOfCustomResource(t) and
+  t.getName().matches("%Status")
+}
+
+/**
+ * Holds if every custom-resource type that could witness the access of `f` on
+ * `base` is a status type (see `isCustomResourceStatusType`).
+ *
+ * `forex` rather than `exists` because Go gives structurally identical structs a
+ * single `Field` entity: if the same field is reachable both under a status and
+ * under a spec, the spec reading is the one that decides, and the read stays a
+ * source.
+ */
+predicate isCustomResourceStatusFieldAccess(DataFlow::Node base, Field f) {
+  forex(Type owner |
+    owner = unwrap*(base.getType()) and
+    isPartOfCustomResource(owner) and
+    owner.getField(_) = f
+  |
+    isCustomResourceStatusType(owner)
+  )
 }
 
 /**
  * A read of a string-typed field of a Kubernetes custom resource, used as a
  * taint source for values an operator's user controls through a CR manifest.
+ *
+ * Reads of fields under the CR's `Status` are excluded: the API server strips
+ * user-supplied status whenever the CRD declares the status subresource, so
+ * those values come from the operator itself, not from the manifest author. See
+ * `isCustomResourceStatusType` for what that approximation does and does not
+ * cover.
  */
 class CustomResourceValueSource extends DataFlow::ReadNode {
   CustomResourceValueSource() {
     exists(Field f, DataFlow::Node base |
       this.readsField(base, f) and
       isCustomResourceFieldAccess(base, f) and
-      isStringishField(f)
+      isStringishField(f) and
+      not isCustomResourceStatusFieldAccess(base, f)
     )
   }
 }
 
 /**
- * A value written to a string-typed field of a Kubernetes custom resource, used
- * as a taint sink for data that must not be persisted into a CR.
+ * Holds if `container` is a map, slice or array that belongs to a custom
+ * resource and whose elements are string-ish — the thing being indexed in
+ * `cr.Spec.Fields[key] = secretValue`.
+ *
+ * The container is identified by the *field read* that produced it, so the CR
+ * base constraint of `isCustomResourceFieldAccess` still applies; a bare
+ * `map[string]string` local, which shares its `Type` entity with every other
+ * `map[string]string` in the program, is not enough. `DataFlow::localFlow` (which
+ * is reflexive) lets the write happen through an alias:
+ * `m := cr.Spec.Fields; m[key] = secretValue`.
  */
-class CustomResourceSink extends DataFlow::Node {
-  CustomResourceSink() {
+predicate isCustomResourceStringishContainer(DataFlow::Node container) {
+  exists(DataFlow::ReadNode fieldRead, DataFlow::Node base, Field f |
+    fieldRead.readsField(base, f) and
+    isCustomResourceFieldAccess(base, f) and
+    isStringishContainerField(f) and
+    not f instanceof K8sSecretDataField and
+    DataFlow::localFlow(fieldRead, container)
+  )
+}
+
+/**
+ * A value written into a string-typed field of a Kubernetes custom resource, or
+ * into a string-typed element of one of its maps, slices or arrays.
+ *
+ * Three shapes are matched, and all three occur in real operators:
+ *
+ * - a field write, `cr.Spec.Token = secretValue`;
+ * - a field write whose value is a *container* of strings, which is what
+ *   `cr.Spec.List = append(cr.Spec.List, secretValue)` compiles to — the written
+ *   node is the result of `append`, typed `[]string`, so `isStringishField` never
+ *   matches it (see `isStringishContainerField`); and
+ * - an element write, `cr.Spec.Fields[key] = secretValue`, which produces no
+ *   field write at all and so was previously invisible.
+ *
+ * The element case uses `writesElementPreUpdate` rather than `writesElement`
+ * because the pre-update base is the field read of the container itself, which is
+ * what `isCustomResourceStringishContainer` has to match; `writesElement` hands
+ * back a `PostUpdateNode` instead.
+ *
+ * `Secret.Data` and `Secret.StringData` are excluded as destinations. A
+ * `corev1.Secret` is reachable from the CR type graph of real operators
+ * (kubeblocks embeds one), `Secret.Data` is a `map[string][]byte` and therefore a
+ * string-ish container, and operators copy secrets into other secrets constantly
+ * — `dst.Data[key] = src.Data[key]`, `builder.get().Data = data`. Moving secret
+ * material into a `Secret` is not a leak; a `Secret` is where it belongs. Without
+ * this, the element-write case alone contributes twelve results on kubeblocks,
+ * every one of them a secret-to-secret copy.
+ */
+class CustomResourceFieldSink extends DataFlow::Node {
+  CustomResourceFieldSink() {
     exists(Field f, Write w, DataFlow::Node base |
       w.writesField(base, f, this) and
       isCustomResourceFieldAccess(base, f) and
-      isStringishField(f)
+      not f instanceof K8sSecretDataField and
+      (isStringishField(f) or isStringishContainerField(f))
     )
+    or
+    exists(Write w, DataFlow::Node container |
+      w.writesElementPreUpdate(container, _, this) and
+      isCustomResourceStringishContainer(container)
+    )
+  }
+}
+
+/**
+ * Holds if `f` is a field into which writing secret material materialises that
+ * secret somewhere the operator persists it, whatever object it belongs to.
+ *
+ * Unlike the custom-resource sinks, these are pinned by qualified name alone and
+ * carry no base constraint, because the field identity *is* the persistence
+ * argument:
+ *
+ * - `corev1.EnvVar.Value` — a literal environment-variable value. `EnvVar` exists
+ *   in the Kubernetes API only inside a container spec, so an `EnvVar` the
+ *   operator builds ends up in a PodSpec, in the pod's `/proc/<pid>/environ`, and
+ *   readable by anyone with `get pod`. This is the shape of the one real
+ *   `EnvVar.Value` finding in the 45-operator hunt (kserve `BuildSecretEnvs`).
+ * - `corev1.ConfigMap.Data` / `BinaryData` — a ConfigMap is the explicitly
+ *   *non*-secret half of the API. Anything written here is readable by every
+ *   subject with `get configmap`, which is a far wider set than `get secret`.
+ * - `metav1.ObjectMeta.Annotations` — annotations are persisted on the object and
+ *   show up in `kubectl get -o yaml`, in `last-applied-configuration`, and in
+ *   every audit log entry for the object.
+ */
+predicate isSecretMaterializationField(Field f) {
+  f.hasQualifiedName("k8s.io/api/core/v1", "EnvVar", "Value")
+  or
+  f.hasQualifiedName("k8s.io/api/core/v1", "ConfigMap", ["Data", "BinaryData"])
+  or
+  f.hasQualifiedName("k8s.io/apimachinery/pkg/apis/meta/v1", "ObjectMeta", "Annotations")
+}
+
+/**
+ * A value written into a destination that materialises it as persisted,
+ * non-secret data: an environment variable value, a ConfigMap entry or an
+ * annotation. See `isSecretMaterializationField` for why each of those is a leak
+ * in its own right.
+ *
+ * This is a sibling of `CustomResourceFieldSink`, not a case of it, and it
+ * deliberately does not inherit the custom-resource base constraint: none of
+ * these destinations is a custom-resource field, and requiring one would have
+ * meant either a class whose name no longer described its contents or a base
+ * constraint that discarded exactly the findings this class exists for. The two
+ * whole-map shapes are both matched — `cm.Data = map[string]string{...}` (a field
+ * write, whose value carries taint from its own element initialisers) and
+ * `cm.Data[key] = value` (an element write into the field read).
+ *
+ * Not matched, and worth knowing: `obj.SetAnnotations(m)` and the other
+ * accessor methods of `metav1.Object`, which reach the same field through an
+ * interface call rather than a field write.
+ */
+class SecretMaterializationSink extends DataFlow::Node {
+  SecretMaterializationSink() {
+    exists(Write w, Field f |
+      isSecretMaterializationField(f) and
+      w.writesField(_, f, this)
+    )
+    or
+    exists(Write w, DataFlow::ReadNode container, Field f |
+      isSecretMaterializationField(f) and
+      container.readsField(_, f) and
+      w.writesElementPreUpdate(container, _, this)
+    )
+  }
+}
+
+/**
+ * A place where secret material must not land: a custom-resource field
+ * (`CustomResourceFieldSink`) or a destination that materialises the value as
+ * persisted, non-secret data (`SecretMaterializationSink`).
+ */
+class SecretLeakSink extends DataFlow::Node {
+  SecretLeakSink() {
+    this instanceof CustomResourceFieldSink
+    or
+    this instanceof SecretMaterializationSink
   }
 }

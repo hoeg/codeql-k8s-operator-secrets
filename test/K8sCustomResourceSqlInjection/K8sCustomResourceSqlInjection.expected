@@ -1,20 +1,34 @@
 edges
-| test.go:60:50:60:63 | selection of Filter | test.go:60:11:60:69 | ...+... | provenance | Sink:MaD:184 |
-| test.go:65:26:65:46 | type conversion | test.go:65:10:65:46 | ...+... | provenance | Sink:MaD:180 |
-| test.go:65:33:65:45 | selection of Table | test.go:65:26:65:46 | type conversion | provenance |  |
-| test.go:110:19:110:54 | struct literal | test.go:111:17:111:22 | filter | provenance | Sink:MaD:1583 |
-| test.go:110:40:110:53 | selection of Filter | test.go:110:19:110:54 | struct literal | provenance | Config |
+| test.go:61:11:61:63 | ...+... | test.go:61:11:61:63 | ...+... | provenance | Config |
+| test.go:61:11:61:63 | ...+... | test.go:61:11:61:69 | ...+... | provenance |  |
+| test.go:61:11:61:63 | ...+... | test.go:61:11:61:69 | ...+... | provenance | Sink:MaD:184 |
+| test.go:61:11:61:69 | ...+... | test.go:61:11:61:69 | ...+... | provenance | Config Sink:MaD:184 |
+| test.go:61:50:61:63 | selection of Filter | test.go:61:11:61:63 | ...+... | provenance |  |
+| test.go:66:10:66:46 | ...+... | test.go:66:10:66:46 | ...+... | provenance | Config Sink:MaD:180 |
+| test.go:66:26:66:46 | type conversion | test.go:66:10:66:46 | ...+... | provenance |  |
+| test.go:66:33:66:45 | selection of Table | test.go:66:26:66:46 | type conversion | provenance |  |
+| test.go:157:9:157:52 | []type{args} [array] | test.go:157:9:157:52 | call to Sprintf | provenance | MaD:311 |
+| test.go:157:9:157:52 | call to Sprintf | test.go:157:9:157:52 | call to Sprintf | provenance | Config |
+| test.go:157:9:157:52 | call to Sprintf | test.go:161:10:161:31 | call to buildDropStatement | provenance | Sink:MaD:180 |
+| test.go:157:38:157:51 | selection of Filter | test.go:157:9:157:52 | []type{args} [array] | provenance |  |
+| test.go:157:38:157:51 | selection of Filter | test.go:157:9:157:52 | call to Sprintf | provenance | FunctionModel |
 nodes
-| test.go:60:11:60:69 | ...+... | semmle.label | ...+... |
-| test.go:60:50:60:63 | selection of Filter | semmle.label | selection of Filter |
-| test.go:65:10:65:46 | ...+... | semmle.label | ...+... |
-| test.go:65:26:65:46 | type conversion | semmle.label | type conversion |
-| test.go:65:33:65:45 | selection of Table | semmle.label | selection of Table |
-| test.go:110:19:110:54 | struct literal | semmle.label | struct literal |
-| test.go:110:40:110:53 | selection of Filter | semmle.label | selection of Filter |
-| test.go:111:17:111:22 | filter | semmle.label | filter |
+| test.go:61:11:61:63 | ...+... | semmle.label | ...+... |
+| test.go:61:11:61:63 | ...+... | semmle.label | ...+... |
+| test.go:61:11:61:69 | ...+... | semmle.label | ...+... |
+| test.go:61:11:61:69 | ...+... | semmle.label | ...+... |
+| test.go:61:50:61:63 | selection of Filter | semmle.label | selection of Filter |
+| test.go:66:10:66:46 | ...+... | semmle.label | ...+... |
+| test.go:66:10:66:46 | ...+... | semmle.label | ...+... |
+| test.go:66:26:66:46 | type conversion | semmle.label | type conversion |
+| test.go:66:33:66:45 | selection of Table | semmle.label | selection of Table |
+| test.go:157:9:157:52 | []type{args} [array] | semmle.label | []type{args} [array] |
+| test.go:157:9:157:52 | call to Sprintf | semmle.label | call to Sprintf |
+| test.go:157:9:157:52 | call to Sprintf | semmle.label | call to Sprintf |
+| test.go:157:38:157:51 | selection of Filter | semmle.label | selection of Filter |
+| test.go:161:10:161:31 | call to buildDropStatement | semmle.label | call to buildDropStatement |
 subpaths
 #select
-| test.go:60:11:60:69 | ...+... | test.go:60:50:60:63 | selection of Filter | test.go:60:11:60:69 | ...+... | Data from custom resource in SQL query |
-| test.go:65:10:65:46 | ...+... | test.go:65:33:65:45 | selection of Table | test.go:65:10:65:46 | ...+... | Data from custom resource in SQL query |
-| test.go:111:17:111:22 | filter | test.go:110:40:110:53 | selection of Filter | test.go:111:17:111:22 | filter | Data from custom resource in SQL query |
+| test.go:61:11:61:69 | ...+... | test.go:61:50:61:63 | selection of Filter | test.go:61:11:61:69 | ...+... | Data from custom resource in SQL query |
+| test.go:66:10:66:46 | ...+... | test.go:66:33:66:45 | selection of Table | test.go:66:10:66:46 | ...+... | Data from custom resource in SQL query |
+| test.go:161:10:161:31 | call to buildDropStatement | test.go:157:38:157:51 | selection of Filter | test.go:161:10:161:31 | call to buildDropStatement | Data from custom resource in SQL query |

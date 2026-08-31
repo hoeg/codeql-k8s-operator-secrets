@@ -3,10 +3,8 @@ package v1
 
 // ObjectMeta is a stub of metav1.ObjectMeta.
 type ObjectMeta struct {
-	Name        string
-	Namespace   string
-	Labels      map[string]string
-	Annotations map[string]string
+	Name      string
+	Namespace string
 }
 
 // TypeMeta is a stub of metav1.TypeMeta.

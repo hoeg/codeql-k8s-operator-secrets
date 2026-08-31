@@ -1,0 +1,5 @@
+| andGuard | test.go:67:30:67:36 | selection of Value |
+| ifGuard | test.go:30:8:30:14 | selection of Value |
+| pointerBase | test.go:59:7:59:13 | selection of Value |
+| switchGuard | test.go:45:8:45:14 | selection of Value |
+| switchGuard | test.go:47:8:47:14 | selection of Value |
