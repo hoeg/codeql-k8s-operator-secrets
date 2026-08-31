@@ -1,0 +1,9 @@
+// Stub of sigs.k8s.io/controller-runtime/pkg/scheme.
+package scheme
+
+// Builder is a stub of scheme.Builder.
+type Builder struct{}
+
+// Register is a stub of scheme.Builder.Register, the kubebuilder registration
+// entry point and the other half of isSchemeRegistrationArgument's sink.
+func (b *Builder) Register(objs ...interface{}) *Builder { return b }

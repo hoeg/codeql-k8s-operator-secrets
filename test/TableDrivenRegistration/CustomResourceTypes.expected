@@ -1,0 +1,6 @@
+| example.com/tabledrivenoperator | BuilderCR |
+| example.com/tabledrivenoperator | MyCR |
+| example.com/tabledrivenoperator | MyCRList |
+| example.com/tabledrivenoperator | ShortCR |
+| example.com/tabledrivenoperator | SliceCR |
+| example.com/tabledrivenoperator | SliceCRList |

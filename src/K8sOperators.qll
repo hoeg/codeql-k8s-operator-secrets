@@ -41,6 +41,166 @@ class APISchemaBuilder extends Method {
 }
 
 /**
+ * Holds if `t` embeds the apimachinery meta struct named `name` — one of
+ * `TypeMeta`, `ObjectMeta` or `ListMeta`.
+ *
+ * The test is for a *field whose own type is* `metav1.<name>`, which in Go is
+ * exactly what an embedded field looks like: `metav1.TypeMeta` embedded in
+ * `Backup` is a field named `TypeMeta` of type `metav1.TypeMeta`.
+ *
+ * `Type.getField` also returns promoted fields — asking velero's `Backup` for
+ * its fields yields `Kind`, `Namespace`, `Labels` and the rest of `ObjectMeta`
+ * alongside `Spec` and `Status` — so this holds for a type that embeds the meta
+ * struct at any depth, not only directly. That is the intended reading: a struct
+ * that reaches `TypeMeta` through an embedded struct is still a Kubernetes API
+ * object. It does *not* hold merely because a type has a named (non-embedded)
+ * field of some other struct type, because promotion follows embedding only.
+ */
+private predicate embedsApiMachineryMeta(Type t, string name) {
+  exists(Field f |
+    f = t.getField(_) and
+    f.getType().hasQualifiedName("k8s.io/apimachinery/pkg/apis/meta/v1", name)
+  )
+}
+
+/**
+ * Holds if `t` has the structural signature of a top-level Kubernetes API object
+ * declared by the operator under analysis: it embeds `metav1.TypeMeta` together
+ * with either `metav1.ObjectMeta` (an item, `Backup`) or `metav1.ListMeta` (a
+ * list, `BackupList`), and it is not declared under `k8s.io/` or `sigs.k8s.io/`.
+ *
+ * This is the source filter for `SchemeRegistrationFlow`, and it is what makes
+ * that configuration affordable. A composite literal `&T{}` is one of the most
+ * common expressions in Go — 1836 of them in velero, 2139 in cert-manager — and
+ * seeding a global data-flow configuration with all of them is not viable. The
+ * signature cuts that to 255 and 168 respectively. It costs no recall, because
+ * embedding `TypeMeta` plus one of the two metas is not a heuristic: it is the
+ * contract an object must satisfy to implement `runtime.Object` and be
+ * registerable with a scheme at all.
+ *
+ * The package exclusion is applied here, at the source, rather than to the type
+ * that comes out. It is the same exclusion the `AddKnownTypes` disjunct of
+ * `CustomResourceType` carries — upstream packages register their own types,
+ * `corev1.Secret` included, and admitting them would make `Secret` itself a
+ * custom resource — but flow reaches further than a syntactic argument match, so
+ * with flow it matters more, not less. Excluding upstream literals from the
+ * search space is both cheaper and safer than filtering the answer afterwards.
+ */
+private predicate isRegisterableApiObjectType(Type t) {
+  embedsApiMachineryMeta(t, "TypeMeta") and
+  embedsApiMachineryMeta(t, ["ObjectMeta", "ListMeta"]) and
+  exists(string pkg |
+    t.hasQualifiedName(pkg, _) and
+    not pkg.matches(["k8s.io/%", "sigs.k8s.io/%"])
+  )
+}
+
+/**
+ * Holds if `n` is the expression `&T{}`, a pointer to a freshly constructed
+ * Kubernetes API object whose type is `base`.
+ */
+private predicate isApiObjectLiteral(DataFlow::Node n, Type base) {
+  exists(AddressExpr addr |
+    n.asExpr() = addr and
+    addr.getOperand() instanceof CompositeLit and
+    base = addr.getOperand().getType() and
+    isRegisterableApiObjectType(base)
+  )
+}
+
+/**
+ * Holds if `n` is an argument of a call that registers types with a runtime
+ * scheme: `scheme.Builder.Register`, `runtime.Scheme.AddKnownTypes` or
+ * `runtime.Scheme.AddKnownTypeWithName`.
+ *
+ * Every argument is a sink, not just the object ones. The non-object arguments
+ * are a `schema.GroupVersion` and a kind string, neither of which any API-object
+ * literal can flow to, so narrowing by position would buy nothing and would have
+ * to be kept in step with three different signatures.
+ */
+private predicate isSchemeRegistrationArgument(DataFlow::Node n) {
+  exists(CallExpr ce |
+    ce.getTarget() instanceof SchemaBuilder or
+    ce.getTarget() instanceof APISchemaBuilder
+  |
+    n.asExpr() = ce.getAnArgument()
+  )
+}
+
+/**
+ * Value flow from an API-object literal `&T{}` to an argument of a scheme
+ * registration call.
+ *
+ * This exists for the *table-driven* registration idiom, in which the concrete
+ * type never appears at the registration call at all. velero is the canonical
+ * example (`pkg/apis/velero/v1/register.go`):
+ *
+ * ```go
+ * type typeInfo struct{ PluralName string; ItemType, ItemListType runtime.Object }
+ *
+ * func newTypeInfo(pluralName string, itemType, itemListType runtime.Object) typeInfo {
+ *   return typeInfo{PluralName: pluralName, ItemType: itemType, ItemListType: itemListType}
+ * }
+ *
+ * func CustomResources() map[string]typeInfo {
+ *   return map[string]typeInfo{
+ *     "Backup":  newTypeInfo("backups", &Backup{}, &BackupList{}),
+ *     "Restore": newTypeInfo("restores", &Restore{}, &RestoreList{}),
+ *     // ... 11 entries
+ *   }
+ * }
+ *
+ * func addKnownTypes(scheme *runtime.Scheme) error {
+ *   for _, typeInfo := range CustomResources() {
+ *     scheme.AddKnownTypes(SchemeGroupVersion, typeInfo.ItemType, typeInfo.ItemListType)
+ *   }
+ * }
+ * ```
+ *
+ * `Backup` is named exactly once in the whole registration, in the composite
+ * literal `&Backup{}`. From there it is widened to the interface
+ * `runtime.Object` by `newTypeInfo`'s parameter, stored into a struct field,
+ * placed in a map literal, returned across a function boundary, read back out by
+ * a `range`, and only then passed to `AddKnownTypes`. By the time it reaches the
+ * call its static type is `runtime.Object`, so the syntactic match
+ * `ce.getAnArgument().getType().(PointerType).getBaseType()` used by the other
+ * two disjuncts of `CustomResourceType` resolves nothing at all. velero reports
+ * **zero** custom resource types under that match — and with no CR types there
+ * are no CR-field sinks, so both security queries report a vacuous zero on it
+ * rather than a real one.
+ *
+ * The chain crosses a helper function, a struct-field store, a map literal and a
+ * range read, so `DataFlow::localFlow` cannot span it even with a hand-written
+ * step for the helper call: the store into `typeInfo.ItemType` and the matching
+ * read after the `range` are content steps, and content is what local flow does
+ * not have. Interprocedural flow with store/read steps is the smallest thing
+ * that works, which is `DataFlow::Global`.
+ *
+ * `DataFlow::Global` and not `TaintTracking::Global`, for two reasons. What is
+ * being tracked is the *identity* of an object, so taint's extra steps — string
+ * operations, calls that merely observe a value — could let one registered
+ * type's identity bleed onto another and would buy nothing here. And a
+ * `DataFlow::Global` configuration is not subject to
+ * `TaintTracking::DefaultTaintSanitizer`, so this configuration is insulated
+ * from `PemBlockTypeSanitizer` and from any other pack-wide taint barrier; none
+ * of them has anything to say about scheme registration, and inheriting them
+ * silently would be a bug waiting to happen.
+ *
+ * This is the third data-flow configuration in the pack and the only one that
+ * lives in the library rather than in a query. It is `private`, so it cannot
+ * collide with `SecretToCrConfig` in `K8sSecretsLeak.ql` or `CrToSqlConfig` in
+ * `K8sCustomResourceSqlInjection.ql`, and neither of those inherits anything
+ * from it.
+ */
+private module SchemeRegistrationConfig implements DataFlow::ConfigSig {
+  predicate isSource(DataFlow::Node n) { isApiObjectLiteral(n, _) }
+
+  predicate isSink(DataFlow::Node n) { isSchemeRegistrationArgument(n) }
+}
+
+private module SchemeRegistrationFlow = DataFlow::Global<SchemeRegistrationConfig>;
+
+/**
  * A type registered as a Kubernetes custom resource: the base type of a pointer
  * passed either to `scheme.Builder.Register` (the kubebuilder idiom) or to
  * `runtime.Scheme.AddKnownTypes` / `AddKnownTypeWithName` (the client-go idiom).
@@ -53,6 +213,27 @@ class APISchemaBuilder extends Method {
  * `corev1.Secret`) through the second form, so types declared under `k8s.io/` or
  * `sigs.k8s.io/` are excluded by package path rather than by dropping the whole
  * idiom.
+ *
+ * The first two disjuncts read the concrete type straight off the call argument.
+ * They are the fast path and they cover most operators, but they see only the
+ * case where the type is written *at* the registration call. The third disjunct
+ * covers the table-driven idiom, where it is not: the type is named once in a
+ * composite literal and reaches the scheme through a helper function, a struct
+ * field and a map, arriving as a bare `runtime.Object`. See
+ * `SchemeRegistrationFlow` for the shape and for why local reasoning cannot span
+ * it. Keeping the syntactic disjuncts rather than letting flow subsume them is
+ * deliberate: they cost almost nothing, and they still match registrations whose
+ * argument is not a composite literal at all (a package-level `var backup Backup`
+ * passed as `&backup`, say), which the flow disjunct's source filter excludes.
+ *
+ * List types (`BackupList`) count as custom resource types. That is not a new
+ * decision made here — kubebuilder's `SchemeBuilder.Register(&Foo{}, &FooList{})`
+ * passes both, so the syntactic disjuncts have always admitted both, and having
+ * the flow disjunct disagree would make the same operator report different
+ * numbers depending on which idiom it happened to use. It is also a distinction
+ * without a difference for the queries downstream: a list's `Items []Foo` field
+ * makes `Foo` reachable through `isPartOfCustomResource` either way. Concretely,
+ * velero's 13 kinds across two API versions yield 26 types, item and list.
  */
 class CustomResourceType extends Type {
   CustomResourceType() {
@@ -66,6 +247,11 @@ class CustomResourceType extends Type {
       this = ce.getAnArgument().getType().(PointerType).getBaseType() and
       this.hasQualifiedName(pkg, _) and
       not pkg.matches(["k8s.io/%", "sigs.k8s.io/%"])
+    )
+    or
+    exists(DataFlow::Node src |
+      isApiObjectLiteral(src, this) and
+      SchemeRegistrationFlow::flow(src, _)
     )
   }
 }
