@@ -10,7 +10,6 @@ on:
 
 permissions:
   contents: read
-  security-events: read
 
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
@@ -32,21 +31,21 @@ jobs:
           go-version: stable
           cache: false
 
-      # Supplies the CodeQL CLI and the Go extractor.
-      - name: Initialize CodeQL
-        id: init-codeql
-        uses: github/codeql-action/init@v4
-        with:
-          languages: go
-
-      - name: Put the CodeQL CLI on PATH
+      # Install the CodeQL CLI directly from the bundle, which ships the CLI,
+      # the Go extractor and the standard-library packs. This pack only compiles
+      # and tests QL — it never analyzes a codebase — so github/codeql-action is
+      # unnecessary here and its init step emits incremental-analysis noise on a
+      # query-pack repo. Pinned to match the CLI used in development.
+      - name: Install the CodeQL CLI
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
-          codeql_path='${{ steps.init-codeql.outputs.codeql-path }}'
-          if [ -z "$codeql_path" ]; then
-            echo "::error::github/codeql-action/init did not report a codeql-path" >&2
-            exit 1
-          fi
-          dirname "$codeql_path" >> "$GITHUB_PATH"
+          gh release download codeql-bundle-v2.26.4 \
+            --repo github/codeql-action \
+            --pattern codeql-bundle-linux64.tar.gz \
+            --dir "$RUNNER_TEMP"
+          tar -xzf "$RUNNER_TEMP/codeql-bundle-linux64.tar.gz" -C "$RUNNER_TEMP"
+          echo "$RUNNER_TEMP/codeql" >> "$GITHUB_PATH"
 
       - name: Report the CodeQL version
         run: codeql version --format=terse
