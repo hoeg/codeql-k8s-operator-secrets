@@ -75,8 +75,9 @@ jobs:
           codeql resolve queries --search-path=. -- hoeg/k8s-operators > "$resolved"
           cat "$resolved"
           if [ "$(grep -c '/src/Security/' "$resolved")" -ne 2 ] \
+             || [ "$(grep -c '/src/Diagnostics/' "$resolved")" -ne 1 ] \
              || [ "$(grep -c '/src/Exploration/' "$resolved")" -ne 0 ] \
-             || [ "$(wc -l < "$resolved")" -ne 2 ]; then
-            echo "::error::hoeg/k8s-operators did not resolve to exactly the two Security/ queries" >&2
+             || [ "$(wc -l < "$resolved")" -ne 3 ]; then
+            echo "::error::hoeg/k8s-operators did not resolve to the two Security/ queries plus the diagnostic" >&2
             exit 1
           fi
