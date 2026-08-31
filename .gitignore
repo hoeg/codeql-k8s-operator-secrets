@@ -24,3 +24,6 @@ results/
 # and writes .actual on failure. Both are generated; never commit them.
 *.testproj
 *.actual
+
+# scan-repos.sh output
+scan-out/
