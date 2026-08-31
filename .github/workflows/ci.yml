@@ -10,6 +10,7 @@ on:
 
 permissions:
   contents: read
+  security-events: read
 
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
@@ -22,11 +23,11 @@ jobs:
 
     steps:
       - name: Check out the repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       # The Go extractor needs a Go toolchain to build the test fixtures.
       - name: Set up Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v6
         with:
           go-version: stable
           cache: false
@@ -34,7 +35,7 @@ jobs:
       # Supplies the CodeQL CLI and the Go extractor.
       - name: Initialize CodeQL
         id: init-codeql
-        uses: github/codeql-action/init@v3
+        uses: github/codeql-action/init@v4
         with:
           languages: go
 
