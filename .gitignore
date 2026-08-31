@@ -27,3 +27,6 @@ results/
 
 # scan-repos.sh output
 scan-out/
+
+# Local disclosure PoCs — vulnerable operators on a throwaway cluster; never commit
+campaign/
